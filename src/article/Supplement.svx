@@ -1,0 +1,92 @@
+---
+title: A deeper dive into PaCMAP theory
+layout: ./Layout.svelte
+---
+
+<!-- Article structure adapted from the "Understanding UMAP" supplement by
+Andy Coenen & Adam Pearce (Google PAIR, 2019), licensed under Apache 2.0.
+Rewritten for PaCMAP. Original license header preserved below. -->
+
+<!-- Copyright 2019 Google LLC All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================-->
+
+```js exec
+import Figure from "./Figure.svelte";
+import Spacer from "./Spacer.svelte";
+import FmnistLabel from "./FminstLabel.svelte";
+
+import CechVisualization from "../visualizations/cech_visualization/components/Visualization.svelte";
+```
+
+<h1 class="article-title">A deeper dive into PaCMAP theory</h1>
+
+_A local port; original supplement by Andy Coenen &amp; Adam Pearce ([Google PAIR](https://ai.google/research/teams/brain/pair))._
+
+<Spacer height={20} />
+
+This supplement offers a more detailed pass through the PaCMAP algorithm, following up on the overview in [Understanding PaCMAP](__URL_PREFIX__/index.html). For the definitive treatment, see the [PaCMAP paper](https://www.jmlr.org/papers/v22/20-1061.html) (Wang, Sun, Huang, Rudin, JMLR 2021) and the [reference implementation](https://github.com/YingfanWang/PaCMAP).
+
+Most dimensionality reduction algorithms fit into one of two broad categories: matrix factorization (like PCA) or graph layout (like t-SNE and UMAP). PaCMAP is a graph-layout method, but the "graph" it optimizes is unusual: instead of a single weighted neighbor graph, it uses three disjoint sets of point pairs, and it optimizes them all simultaneously against a smooth loss.
+
+## Step 1: pair selection
+
+PaCMAP's design choice is that *what you pull together and push apart* matters more than how you weight edges. So the algorithm spends its first step deciding which pairs of points fall into which of three categories.
+
+### Neighbor pairs
+
+For each point, PaCMAP finds its `n_neighbors * 1.5` nearest neighbors under a *scaled* Euclidean distance. The scaling is the interesting part: rather than raw distance, PaCMAP divides the pairwise distance between two points by the average distance from each of them to their 4th–6th nearest neighbor. This is essentially a local density normalization — points in dense regions have small denominators, so their neighborhoods are compact; points in sparse regions have large denominators, so their neighborhoods stretch. After scaling, PaCMAP keeps the closest `n_neighbors` per point as neighbor pairs.
+
+<Figure>
+  <CechVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure S1: </span>The Čech radius illustration from the UMAP supplement. Here the useful analogy is that PaCMAP's local density normalization means the "radius" that defines a neighborhood is different for each point — dense regions get a small radius, sparse regions get a big one.
+  </span>
+</Figure>
+
+### Mid-near pairs
+
+For each point, PaCMAP samples six random other points and keeps the second-closest of the six as a *mid-near* partner. It repeats this `MN_ratio * n_neighbors` times per point. The "closer of six random draws" is a clever trick — the expected distance of the closer of six random points sits somewhere between the immediate neighborhood (distance to the 1st NN) and the global average (distance to the median point). That's exactly the *mid-range* structure PaCMAP wants to capture.
+
+### Further pairs
+
+For each point, PaCMAP samples `FP_ratio * n_neighbors` random other points and marks them as *further* pairs. There's no filtering — just uniform random negative sampling.
+
+## Step 2: three-phase optimization
+
+The embedding is initialized with PCA (this is important — random initialization loses PaCMAP's global-structure guarantee). Then PaCMAP minimizes a loss of the form
+
+```
+Loss = w_NB * Σ neighbor_loss + w_MN * Σ mid_near_loss + w_FP * Σ further_loss
+```
+
+where each per-pair loss is a smooth attractive/repulsive term (specifically `d² / (10 + d²)` for attraction and `1 / (1 + d²)` for repulsion), and `w_NB`, `w_MN`, `w_FP` are per-phase weights that change on a fixed schedule:
+
+- **Phase 1 (iterations 0–100):** `w_MN` starts high and decays linearly to a small value; `w_NB` and `w_FP` are held constant. Global structure is laid out first.
+- **Phase 2 (iterations 100–200):** `w_MN` is small and constant; `w_NB` remains constant. Neighbor pairs sharpen the local layout on top of the global scaffold.
+- **Phase 3 (iterations 200–450):** `w_MN = 0`; only `w_NB` and `w_FP` are active. Clusters are polished without disturbing the global arrangement.
+
+This staged schedule is a big part of why PaCMAP is reproducible across seeds: the global structure is essentially fixed by the end of Phase 1, and the later phases are refinements that can only nudge points within their existing neighborhoods.
+
+## Why this differs from UMAP
+
+UMAP builds one fuzzy simplicial complex — a single weighted graph — and optimizes a low-dimensional analogue to match. PaCMAP explicitly splits the problem: neighbor pairs = "these are close, keep them close"; mid-near pairs = "these are semi-related, keep them somewhat close"; further pairs = "these are unrelated, push them apart". The three-phase schedule then ensures each concern gets its turn in the loss.
+
+The practical effect is that PaCMAP embeddings tend to look more like a *natural extension* of the data's global structure, whereas UMAP embeddings can look more like well-separated clusters that lose the connections between them (especially at low `n_neighbors`).
+
+## When PaCMAP is the wrong choice
+
+- **Very small datasets (<200 points).** The mid-near-pair sampling scheme relies on there being enough points that "the closer of six random draws" is a meaningful notion. On small datasets, use UMAP or t-SNE.
+- **Datasets where you specifically want local density preserved.** PaCMAP's density normalization deliberately flattens local density differences. If you're using the embedding to look for low-density outliers, LargeVis or t-SNE with a small perplexity will show that more directly.
+- **Datasets where you need a differentiable, continuous mapping.** PaCMAP is transductive by default — it computes an embedding for a specific dataset. There's a `TriMap`-style continuous extension (see `pacmap.transform`) but it's less accurate than the fitted embedding.

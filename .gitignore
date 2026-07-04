@@ -1,0 +1,16 @@
+stats.html
+.DS_Store
+node_modules
+public/bundle.*
+public/bundle-supplement.*
+public/*.html
+
+# Python precompute byproducts
+__pycache__/
+*.pyc
+.venv/
+
+# Editor / OS junk
+.idea/
+.vscode/
+Thumbs.db

@@ -1,0 +1,205 @@
+---
+title: Understanding PaCMAP
+layout: ./Layout.svelte
+---
+
+<!-- Article structure adapted from the "Understanding UMAP" article by
+Andy Coenen & Adam Pearce (Google PAIR, 2019), licensed under Apache 2.0.
+Rewritten for PaCMAP; the original license header is preserved below. -->
+
+<!-- Copyright 2019 Google LLC All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================-->
+
+```js exec
+import Figure from "./Figure.svelte";
+import Spacer from "./Spacer.svelte";
+import FmnistLabel from "./FminstLabel.svelte";
+
+import CechVisualization from "../visualizations/cech_visualization/components/Visualization.svelte";
+import FmnistVisualization from "../visualizations/fmnist_visualization/components/VisualizationSideBySide.svelte";
+import HyperparametersVisualization from "../visualizations/hyperparameters_visualization/components/Visualization.svelte";
+import MammothUmapVisualization from "../visualizations/mammoth_visualization/components/VisualizationUmap.svelte";
+import MammothTsneVisualization from "../visualizations/mammoth_visualization/components/VisualizationTsne.svelte";
+import ToyVisualization from "../visualizations/toy_visualization/components/Visualization.svelte";
+import ToyComparisonVisualization from "../visualizations/toy_comparison_visualization/components/Visualization.svelte";
+import StabilityVisualization from "../visualizations/stability_visualization/components/Visualization.svelte";
+```
+
+<h1 class="article-title">Understanding PaCMAP</h1>
+
+_A local port of Coenen &amp; Pearce's "Understanding UMAP" article, rewired for [PaCMAP](https://github.com/YingfanWang/PaCMAP)._
+
+<Spacer height={20} />
+
+Dimensionality reduction is a powerful tool for machine learning practitioners to visualize and understand large, high dimensional datasets. Two of the most widely used techniques for visualization are [t-SNE](https://lvdmaaten.github.io/tsne/) and [UMAP](https://github.com/lmcinnes/umap). Both do a nice job of preserving *local* neighborhoods, but each makes its own compromise on *global* structure — t-SNE tends to shatter it, and UMAP preserves it only when hyperparameters are tuned carefully.
+
+[PaCMAP](https://github.com/YingfanWang/PaCMAP) (Pairwise Controlled Manifold Approximation) is a newer technique by Wang et al. (JMLR 2021) that tries to explicitly balance local and global structure. It does so by sampling three kinds of point pairs during optimization — *neighbor pairs*, *mid-near pairs*, and *further pairs* — and giving each a role in the loss. In this article we take the same tour Coenen and Pearce took through UMAP, but for PaCMAP: how it works, how to use it, and how it compares with UMAP and t-SNE.
+
+<Figure>
+  <ToyVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 1: </span>Live-playback PaCMAP projections of various toy datasets. Hit ▶ to watch the optimization animate through six snapshots taken during PaCMAP's three-phase schedule. All three hyperparameters — <code>n_neighbors</code>, <code>MN_ratio</code>, <code>FP_ratio</code> — are tunable and snap to the nearest precomputed triplet.
+  </span>
+</Figure>
+
+So what does PaCMAP bring to the table? Two things, mainly. First, it preserves global structure by construction — the *mid-near pair* term in its loss explicitly ties together points that are not immediate neighbors but are still "close enough". Second, it's fast: PaCMAP scales roughly linearly with dataset size and typically finishes in a few minutes on datasets where t-SNE takes an hour.
+
+## PaCMAP vs t-SNE, at first glance
+
+Before diving into the theory, let's look at PaCMAP on real, high-dimensional data. The following visualization shows a comparison between PaCMAP and t-SNE on a subset of the 784-dimensional [Fashion MNIST](https://github.com/zalandoresearch/fashion-mnist) dataset, projected down to 3 dimensions. Notice how well clustered each different category is (local structure), while similar categories (such as <FmnistLabel label="sandal"/>, <FmnistLabel label="sneaker"/>, and <FmnistLabel label="ankle boot"/>) tend to colocate (global structure).
+
+<Figure>
+  <FmnistVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 2: </span>Dimensionality reduction applied to the Fashion MNIST dataset. 28x28 images of clothing items in 10 categories are encoded as 784-dimensional vectors and then projected to 3 using PaCMAP and t-SNE.
+  </span>
+</Figure>
+
+Both algorithms exhibit strong local clustering. PaCMAP tends to place semantically related categories closer to each other than t-SNE does — the footwear cluster (sandal / sneaker / boot) stays contiguous, and the upper-body clothing (shirt / t-shirt / pullover / coat / dress) forms a nearby continent. This global cohesion is the payoff of PaCMAP's mid-near-pair term.
+
+## A dip into PaCMAP theory
+
+PaCMAP, at its core, is a graph-embedding algorithm like UMAP and t-SNE, but the graph it optimizes is deliberately much simpler. Instead of building a full fuzzy-simplicial complex or a probabilistic joint distribution, PaCMAP samples three *sets of pairs* of points and optimizes an embedding so that the pairs stay in the right relative positions:
+
+- **Neighbor pairs** — each point is paired with its `n_neighbors` nearest neighbors (measured by a scaled distance that already accounts for local density). These pairs pull together in the embedding: they carry the local structure.
+- **Mid-near pairs** — for each point, PaCMAP samples a handful of moderately-distant partners (the closer of six random draws), controlled by the `MN_ratio` hyperparameter. These pairs give the embedding a gentle pull that preserves *mid-range* structure, which is what mostly determines whether clusters end up in the right neighborhoods relative to one another.
+- **Further pairs** — a larger sample of random, distant points, controlled by `FP_ratio`. These pairs push apart in the embedding, ensuring that unrelated things don't collapse on top of each other.
+
+The `CechVisualization` below is a leftover from the original UMAP article. It's still a useful mental model — think of the radius as the local scale PaCMAP uses to normalize distances before choosing neighbor pairs.
+
+<Figure>
+  <CechVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 3: </span>Adjust the slider to extend a radius outwards from each point. PaCMAP uses each point's local neighbor distances (its 4th–6th nearest neighbors by default) to normalize what counts as "near", which lets it select neighbor pairs in a scale-adaptive way — analogous to picking the radius per point.
+  </span>
+</Figure>
+
+Once these three pair sets are drawn, PaCMAP embeds them by minimizing a smooth loss over three phases. Early iterations weight mid-near pairs heavily (to lay out global structure first); mid iterations gradually shift emphasis to neighbor pairs (to sharpen local clusters); the last iterations only care about neighbor and further pairs (to polish the embedding without disturbing the global layout). This *three-phase optimization* is what gives PaCMAP its characteristic stability — the same run tends to look similar across random seeds and hyperparameter changes.
+
+Interested readers can dive deeper into the algorithm in the supplement: [A deeper dive into PaCMAP](__URL_PREFIX__/supplement.html).
+
+## PaCMAP Parameters
+
+The three parameters most worth tuning in PaCMAP are `n_neighbors`, `MN_ratio`, and `FP_ratio`. The defaults (`n_neighbors=10`, `MN_ratio=0.5`, `FP_ratio=2.0`) work well on most datasets. In this article we'll focus on the first two, which are the ones you'd reach for to trade off local versus global structure.
+
+<Figure>
+  <HyperparametersVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 4: </span>
+    PaCMAP projection of various toy datasets across a grid of <code>n_neighbors</code> and <code>MN_ratio</code> values.
+  </span>
+</Figure>
+
+`n_neighbors` is the number of nearest neighbors used to build the neighbor pairs. Small values sharpen local structure at the cost of coherent clusters; large values smooth out local detail but stabilize the global layout. As a rule of thumb, use `n_neighbors ≈ 10` for datasets up to ~10k points, and scale roughly with the square root of dataset size beyond that.
+
+`MN_ratio` controls how many *mid-near pairs* are drawn per point (as a fraction of `n_neighbors`). Higher values pull global structure in more aggressively — clusters end up more compact and closer to one another. Lower values give an embedding that looks more like UMAP or t-SNE with heavy local emphasis. This is PaCMAP's most distinctive knob: it's the direct handle on the local-vs-global tradeoff.
+
+The following visualization — extended from work by [Max Noichl](https://homepage.univie.ac.at/noichlm94/), and reused here from the original UMAP article — is an exploration of the impact of PaCMAP parameters on a 2D projection of 3D data. By changing `n_neighbors` and `MN_ratio`, you can explore their impact on the resulting projection.
+
+<Figure>
+  <MammothUmapVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 5: </span>
+    PaCMAP projections of a 3D woolly mammoth skeleton (50k points, 10k shown) into 2 dimensions. All three PaCMAP hyperparameters — <code>n_neighbors</code>, <code>MN_ratio</code>, and <code>FP_ratio</code> — are exposed as sliders.
+  </span>
+</Figure>
+
+While most applications of PaCMAP involve projection from high-dimensional data, the projection from 3D serves as a useful analogy for how PaCMAP prioritizes global vs. local structure. As `n_neighbors` grows, the neighbor graph pulls in more of each mammoth's shape at once, and the resulting projection more accurately reflects the animal's overall silhouette. At very low values (`n_neighbors = 3`), even a mammoth loses its head. Increasing `MN_ratio` tightens up the drawing — the tusks stay attached to the skull, the legs stay attached to the body — because mid-near pairs are explicitly telling the optimizer "these are not the same point but they belong close".
+
+## PaCMAP vs t-SNE, revisited
+
+The biggest visible difference between PaCMAP and t-SNE output is this balance between local and global structure — PaCMAP is usually better at preserving global structure. That means inter-cluster relations are more meaningful than in t-SNE. However, it's still important to note that, because PaCMAP and t-SNE both necessarily warp the high-dimensional shape of the data when projecting to lower dimensions, any given axis or distance in low dimensions isn't directly interpretable in the way that PCA distances are.
+
+<Figure>
+  <MammothTsneVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 6: </span>
+    A comparison between PaCMAP and t-SNE projections of a 3D woolly mammoth skeleton (50,000 points) into 2 dimensions, with various settings for parameters. The PaCMAP side exposes all three hyperparameters — <code>n_neighbors</code>, <code>MN_ratio</code>, and <code>FP_ratio</code>. Notice how much more global structure PaCMAP preserves, particularly with larger values of <code>n_neighbors</code>.
+  </span>
+</Figure>
+
+Going back to the 3D mammoth example, we can see some big differences between the two algorithms' output. For lower values of the `perplexity` parameter, t-SNE tends to "spread out" the projected data with very little preservation of global structure. In contrast, PaCMAP tends to group adjacent pieces of the higher-dimensional structure together in low dimensions, which reflects an increased preservation of global structure. It's also notable that t-SNE projections vary widely from run to run, with different pieces of the higher-dimensional data projected to different locations. PaCMAP is also stochastic, but the resulting projections are strikingly similar from run to run and across parameter settings — this reproducibility is one of the algorithm's selling points, and it comes from the three-phase optimization schedule.
+
+It's worth noting that t-SNE and PaCMAP wind up performing very similarly on many of the toy examples in earlier figures, with a few notable exceptions:
+
+<Figure>
+  <ToyComparisonVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 7: </span>
+    Comparison between PaCMAP and t-SNE projecting various toy datasets.
+  </span>
+</Figure>
+
+On the "dense cluster inside a sparse cluster" example — which trips UMAP up as well — PaCMAP typically manages to separate the two, thanks to the further-pair term that pushes unrelated points apart. On the "linked rings" and "trefoil knot" examples, PaCMAP tends to unfold the shape into a recognizable curve, where t-SNE fragments it. Where PaCMAP struggles is with datasets where the meaningful structure is at *very* fine scale (thin manifolds embedded in noise) — the mid-near-pair term can over-smooth them.
+
+## Stability across random seeds
+
+There is one final property that separates PaCMAP from t-SNE and UMAP in practice: **reproducibility**. When you re-run t-SNE or UMAP with a different random seed, you often get an embedding that is *qualitatively* different — clusters swap positions, thin filaments break in new places, "islands" migrate. That is fine if you only look at a single run, but it undermines any downstream conclusion you might try to draw from the geometry of the plot.
+
+PaCMAP's three-phase optimization schedule was designed to fix this. In our own benchmarks at the [Duke DR Group](https://sites.duke.edu/dimensionreduction/), we found that PaCMAP was the only method in a nine-way comparison that produced visually consistent embeddings across random seeds without any hyperparameter tuning. The figure below reproduces the effect: drag the *seed* slider and watch what happens on each side.
+
+<Figure>
+  <StabilityVisualization />
+  <span slot="caption">
+    <span class="figure-number">Figure 8: </span>
+    Method comparison across random seeds on two canonical benchmarks: the 3D mammoth skeleton (a global-structure test) and MNIST digits at 784 dimensions (a local-structure test). Pick a dataset, then drag the seed slider — UMAP and t-SNE re-organize their embeddings dramatically from seed to seed, while PaCMAP stays visually stable. Panels for seeds ≥ 2 have been Procrustes-aligned to the seed-1 embedding so the residual variation you see is real seed variance, not rigid rotation.
+  </span>
+</Figure>
+
+For the same reason, PaCMAP is far less sensitive to the choice of hyperparameters than t-SNE's `perplexity` or UMAP's `min_dist` (see Figure 4 above). Duke's benchmark article puts it plainly: PaCMAP "has no parameters that are designed to be tuned" — the defaults are meant to work, and in the great majority of cases they do.
+
+## How to (mis)read PaCMAP
+
+PaCMAP is not a silver bullet, and reading its results requires the same care as reading t-SNE or UMAP. It's worth revisiting distill's [previous work on (mis)reading t-SNE](https://distill.pub/2016/misread-tsne/) — most of those takeaways still apply here:
+
+#### 1. Hyperparameters matter (but less than in t-SNE or UMAP)
+
+PaCMAP's defaults work well on a much wider range of datasets than t-SNE's `perplexity` or UMAP's `min_dist`. Still, when you're exploring a new dataset, it's worth sweeping `n_neighbors` and `MN_ratio` on a small subset to make sure the picture you're getting is stable.
+
+#### 2. Cluster sizes in a PaCMAP plot mean less than they look like they do
+
+Absolute cluster sizes should not be interpreted as a proxy for cluster density in high dimensions — the optimizer will inflate or compress clusters to make room for the further-pair repulsion.
+
+#### 3. Distances between clusters carry *some* meaning
+
+Unlike t-SNE, inter-cluster distances in PaCMAP tend to reflect real high-dimensional relationships, especially at higher `MN_ratio`. Two adjacent clusters in a PaCMAP embedding are usually more related than two clusters on opposite sides of the plot. Don't take precise distances literally, but the *ordering* of clusters is usually trustworthy.
+
+#### 4. Random noise doesn't always look random
+
+Especially at low values of `n_neighbors`, spurious clustering can appear.
+
+#### 5. Different runs *usually* agree
+
+PaCMAP is stochastic but is designed to be reproducible. Runs with the same hyperparameters at different seeds typically produce nearly identical layouts up to rotation and reflection. If two runs *disagree* substantially, that's a signal that your `n_neighbors` is too low or your dataset is too noisy to embed reliably.
+
+## Conclusion
+
+PaCMAP is a strong default for exploratory dimensionality reduction: it's fast, it's reproducible, and it preserves global structure by design. If you're already using UMAP or t-SNE for visualization, PaCMAP is worth trying first when you want an embedding whose *inter-cluster geometry* you actually intend to read.
+
+<Spacer height={200} />
+
+<footer>
+
+### Acknowledgements
+
+<section class="acknowledgements">
+
+This article is a local port of Andy Coenen and Adam Pearce's [Understanding UMAP](https://pair-code.github.io/understanding-umap/) (Google PAIR, 2019) with the algorithm swapped from UMAP to [PaCMAP](https://github.com/YingfanWang/PaCMAP) (Wang et al., JMLR 2021). Almost every design decision here — the toy datasets, the mammoth, the FMNIST comparison, the article structure — is theirs. The rewrite, and any errors it introduces, are mine.
+
+Interactive projections are precomputed offline with the reference Python `pacmap` package. 3D scatter plots are still powered by [scatter-gl](https://github.com/PAIR-code/scatter-gl).
+
+</section>
+
+</footer>
