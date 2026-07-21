@@ -1,53 +1,41 @@
 <script>
-  /* Copyright 2019 Google LLC All Rights Reserved.
-
-  Licensed under the Apache License, Version 2.0 (the "License");
-  you may not use this file except in compliance with the License.
-  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing, software
-  distributed under the License is distributed on an "AS IS" BASIS,
-  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  See the License for the specific language governing permissions and
-  limitations under the License.
-  ==============================================================================*/
+  /* Figure wrapper — centered content column that can bleed slightly wider
+     than the prose column on desktop so interactive visualisations breathe. */
 </script>
 
 <style>
-  @media only screen and (max-width: 800px) {
-    figure {
-      width: 100%;
-      margin-left: 0%;
-    }
-  }
-
-  @media only screen and (min-width: 800px) {
-    figure {
-      width: 110%;
-      margin-left: -5%;
-    }
-  }
-
   figure {
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    margin-top: 18px;
-  }
-
-  .figure-container {
-    max-width: 1000px;
+    margin: 2.6em 0 1.4em;
+    padding: 18px 18px 6px;
+    background: var(--figure-bg, #ffffff);
+    border: 1px solid var(--figure-border, #eaecef);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    box-sizing: border-box;
     width: 100%;
   }
-
+  @media (min-width: 900px) {
+    figure {
+      width: 112%;
+      margin-left: -6%;
+      padding: 24px 24px 10px;
+    }
+  }
+  .figure-container {
+    width: 100%;
+    max-width: 1100px;
+  }
   caption {
-    margin: 20px 0;
-    font-style: italic;
-    width: 80%;
-    font-size: 13px;
+    display: block;
+    margin: 18px auto 6px;
+    max-width: 780px;
+    font-size: 0.92rem;
+    line-height: 1.55;
+    color: var(--ink-soft, #4b5563);
   }
 </style>
 

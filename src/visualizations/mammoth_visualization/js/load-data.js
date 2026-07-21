@@ -67,6 +67,24 @@ export async function loadUmap() {
   return umapPromise;
 }
 
+let umapRealData = null;
+let umapRealPromise = null;
+
+async function _loadUmapReal() {
+  const res = await fetch(`mammoth_umap_encoded.json`);
+  const mammoth = await res.json();
+  const parsedProjections = parseProjections(mammoth.projections);
+  mammoth.projections = parsedProjections;
+  umapRealData = mammoth;
+  return umapRealData;
+}
+
+export async function loadUmapReal() {
+  if (umapRealData) return umapRealData;
+  if (!umapRealPromise) umapRealPromise = _loadUmapReal();
+  return umapRealPromise;
+}
+
 let mammoth3dData = null;
 let mammoth3dPromise = null;
 

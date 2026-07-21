@@ -34,11 +34,11 @@ REPO = HERE.parent
 PUBLIC = REPO / "public"
 OUT = PUBLIC / "stability_encoded.json"
 
-SEEDS = [1, 2, 3, 4, 5, 6, 7, 8]
+SEEDS = [1, 2, 3, 4]
 METHODS = ["umap", "tsne", "pacmap"]
 
 MAMMOTH_SAMPLE = 2000
-MNIST_SAMPLE = 2000
+MNIST_SAMPLE = None  # None → use the full 10k test set
 HIER_LEAVES_PER = 5
 
 MNIST_IMAGES_URL = "https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz"
@@ -63,7 +63,7 @@ def load_mammoth() -> tuple[np.ndarray, np.ndarray]:
 
 
 def load_mnist() -> tuple[np.ndarray, np.ndarray]:
-    """Fetch MNIST test set (10k digits) and return a fixed 2000-image subset."""
+    """Fetch MNIST test set (10k digits). Uses full set when MNIST_SAMPLE is None."""
     def _fetch(url: str) -> bytes:
         print(f"  downloading {url}")
         with urllib.request.urlopen(url) as r:
@@ -79,6 +79,9 @@ def load_mnist() -> tuple[np.ndarray, np.ndarray]:
     assert magic == 2049
     labels = np.frombuffer(lbl_data[8:], dtype=np.uint8).astype(np.int64)
 
+    if MNIST_SAMPLE is None:
+        pixels = images.reshape(n_img, 28 * 28).astype(np.float64) / 255.0
+        return pixels, labels
     rng = np.random.default_rng(0)
     idx = rng.choice(n_img, size=MNIST_SAMPLE, replace=False)
     idx.sort()
